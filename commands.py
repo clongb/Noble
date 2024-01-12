@@ -2,14 +2,13 @@ import random
 import discord
 import mpcalc
 import sheets
-import requests
-import pprint
+import os
 
 from discord.ext.commands import Bot
 #from discord.ext.commands import tasks
 
 BOT_PREFIX = "-"
-TOKEN = 'KEY' #Add bot token here
+TOKEN = os.environ.get('DISCORD_BOT_TOKEN')
 MSG_SENT = False
 intents = discord.Intents.all()
 intents.members = True
@@ -484,7 +483,7 @@ async def claim(ctx, stage: str, slot: str):
         mapper = str(user).split('#')[0]
         status = 'planning'
         try:
-            sheets.write_to_sheet(stageU, slotU, mapper, '', '', '', '', '', '', '', '', status)
+            sheets.write_to_sheet(os.environ.get('SHEET_TAB_NAME'), os.environ.get('GOOGLE_SHEET_ID'), os.environ.get('SHEET_GID'), stageU, slotU, mapper, '', '', '', '', '', '', '', '', status)
             text = "**" + stageU + ": " + slotU + "** has been claimed by <@" + str(user.id) + ">."
             await ctx.send(text)
         except sheets.StatError as e:
@@ -522,7 +521,7 @@ async def drop(ctx, stage: str, slot: str):
     if role in user.roles:
         mapper = str(user).split('#')[0]
         try:
-            sheets.remove_row(stageU, slotU, mapper)
+            sheets.remove_row(os.environ.get('SHEET_TAB_NAME'), os.environ.get('GOOGLE_SHEET_ID'), os.environ.get('SHEET_GID'), stageU, slotU, mapper)
             text = "**" + stageU + ": " + slotU + "** has been dropped."
             await ctx.send(text)
         except sheets.StatError as e:

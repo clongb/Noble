@@ -17,7 +17,7 @@ def get_values(tab: str, spreadsheet_id: str, cells: str):
     cells: The cell range to be returned
     '''
     scope = ['https://www.googleapis.com/auth/spreadsheets']
-    SERVICE_ACCOUNT_FILE = 'FILE' #service account file here
+    SERVICE_ACCOUNT_FILE = os.environ.get('SERVICE_ACCT_FILE') #service account file here
     global values_input, service
     creds = service_account.Credentials.from_service_account_file(
         SERVICE_ACCOUNT_FILE, scopes=scope)
@@ -38,11 +38,14 @@ def get_values(tab: str, spreadsheet_id: str, cells: str):
 class StatError(Exception):
     pass
 
-def write_to_sheet(stage: str, mod: str, mapper: str, artist: str, sr: str, bpm: str, length: str, cs: str, ar: str, od: str, dl: str, status: str):
+def write_to_sheet(tab: str, spreadsheet_id: str, gid: str, stage: str, mod: str, mapper: str, artist: str, sr: str, bpm: str, length: str, cs: str, ar: str, od: str, dl: str, status: str):
     '''For submitting/claiming beatmaps, it writes all the given strings for map stats into the spreadsheet and color codes the cells based on the stage, status, and mod values 
 
     Parameters
     ----------
+    tab: The sheet tab that the function gets values from
+    spreadsheet_id: The spreadsheet id in the sheet URL
+    gid: The id of the tab at the end of the sheet URL
     stage: The round that the map is going to be used
     mod: The mod the map is being mapped for
     mapper: The mapper submitting the map
@@ -57,16 +60,16 @@ def write_to_sheet(stage: str, mod: str, mapper: str, artist: str, sr: str, bpm:
     status: The current status/progress of the map
     '''
     scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
-    SERVICE_ACCOUNT_FILE = 'FILE' #service account file here
+    SERVICE_ACCOUNT_FILE = os.environ.get('SERVICE_ACCT_FILE') #service account file here
     global values_input, service
     gs = gspread.service_account(filename=SERVICE_ACCOUNT_FILE)
     creds = service_account.Credentials.from_service_account_file(
         SERVICE_ACCOUNT_FILE, scopes=scope)
     service = discovery.build('sheets', 'v4', credentials=creds)
     sheet = gs.open("SHEETNAME")
-    worksheet = sheet.worksheet("WORKSHEET")
-    sheet_id = 'SHEETID' #Sheet id here
-    gid = 'GID' #Sheet gid here
+    worksheet = sheet.worksheet(tab)
+    sheet_id = spreadsheet_id 
+    sheet_gid = gid 
 
 
 
@@ -198,7 +201,7 @@ def write_to_sheet(stage: str, mod: str, mapper: str, artist: str, sr: str, bpm:
             {
                 'repeatCell': {
                     'range': {
-                        'sheetId': gid,
+                        'sheetId': sheet_gid,
 
                         'startRowIndex': index-1,
                         'endRowIndex': index,
@@ -231,7 +234,7 @@ def write_to_sheet(stage: str, mod: str, mapper: str, artist: str, sr: str, bpm:
             {
                 'repeatCell': {
                     'range': {
-                        'sheetId': gid,
+                        'sheetId': sheet_gid,
 
                         'startRowIndex': index-1,
                         'endRowIndex': index,
@@ -259,7 +262,7 @@ def write_to_sheet(stage: str, mod: str, mapper: str, artist: str, sr: str, bpm:
             {
                 'repeatCell': {
                     'range': {
-                        'sheetId': gid,
+                        'sheetId': sheet_gid,
 
                         'startRowIndex': index-1,
                         'endRowIndex': index,
@@ -287,7 +290,7 @@ def write_to_sheet(stage: str, mod: str, mapper: str, artist: str, sr: str, bpm:
             {
                 'repeatCell': {
                     'range': {
-                        'sheetId': gid,
+                        'sheetId': sheet_gid,
 
                         'startRowIndex': index-1,
                         'endRowIndex': index,
@@ -327,28 +330,31 @@ def write_to_sheet(stage: str, mod: str, mapper: str, artist: str, sr: str, bpm:
     ).execute()
     return
 
-def remove_row(stage: str, mod: str, mapper: str):
+def remove_row(tab: str, spreadsheet_id: str, gid: str, stage: str, mod: str, mapper: str):
     '''For dropping a map, moves a specific row based on the given mapper, mod, and stage
 
     Parameters
     ----------
+    tab: The sheet tab that the function gets values from
+    spreadsheet_id: The spreadsheet id in the sheet URL
+    gid: The id of the tab at the end of the sheet URL
     stage: The round that the map is going to be used
     mod: The mod the map is being mapped for
     mapper: The mapper submitting the map
     '''
     scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
-    SERVICE_ACCOUNT_FILE = 'FILE'
+    SERVICE_ACCOUNT_FILE = os.environ.get('SERVICE_ACCT_FILE')
     global values_input, service
     gs = gspread.service_account(filename=SERVICE_ACCOUNT_FILE)
     creds = service_account.Credentials.from_service_account_file(
         SERVICE_ACCOUNT_FILE, scopes=scope)
     service = discovery.build('sheets', 'v4', credentials=creds)
     sheet = gs.open("SHEET")
-    worksheet = sheet.worksheet("WORKSHEET")
+    worksheet = sheet.worksheet(tab)
     index = 4
     found = False
-    sheet_id = 'SHEETID'
-    gid = 'GID'
+    sheet_id = spreadsheet_id
+    sheet_gid = gid
     if mod == None:
         raise StatError("You did not put a mod")
     if stage == None:
@@ -367,7 +373,7 @@ def remove_row(stage: str, mod: str, mapper: str):
             {
                 'repeatCell': {
                     'range': {
-                        'sheetId': gid,
+                        'sheetId': sheet_gid,
 
                         'startRowIndex': index - 1,
                         'endRowIndex': index,

@@ -1,11 +1,9 @@
 import requests
-import pprint
-import sheets
 from zipfile import ZipFile
-import json
 from enum import IntFlag
+import os
 
-API_KEY = "TOKEN" #Insert osu api key here
+API_KEY = os.environ.get('OSU_API_KEY') #Insert osu api key here
 
 class Mod(IntFlag):
     NoMod = 0
