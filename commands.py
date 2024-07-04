@@ -1,10 +1,17 @@
+#!/usr/bin/python
 import random
 import discord
 import mpcalc
 import sheets
 import os
+import asyncio
+from threading import Thread
+import subprocess
+import time
+import json
 
 from discord.ext.commands import Bot
+from discord import app_commands
 #from discord.ext.commands import tasks
 
 BOT_PREFIX = "-"
@@ -14,6 +21,101 @@ intents = discord.Intents.all()
 intents.members = True
 client = Bot(command_prefix=BOT_PREFIX, intents=intents)
 client.remove_command('help')
+
+def runServer():
+    print('Starting server...\n')
+    output = subprocess.run(["node", "./osubot/app.js"]) 
+    print('Done running server...')
+
+def get_dict_value(nested_dict, value, prepath=()):
+    for k, v in nested_dict.items():
+        path = prepath + (k,)
+        if v == value:
+            return path
+        elif hasattr(v, 'items'):
+            p = get_dict_value(v, value, path)
+            if p is not None:
+                return p
+            
+def add_match(interaction: discord.Interaction, map1: str, map2: str, map3: str, map4: str, map5: str, phase: str):
+    maps = {
+        "map1": map1,
+        "map2": map2,
+        "map3": map3,
+        "map4": map4,
+        "map5": map5,
+    }
+        
+    with open("userdb.json", "r") as openfile:
+        user_json = json.load(openfile)
+    with open("matchdb.json", "r") as openfile:
+        match_json = json.load(openfile)
+
+    if (match_json["matches"] == {}):
+        match_index = 0
+    else:
+        match_index = str(int(list(match_json["matches"])[-1])+1)
+    user_index = get_dict_value(user_json, interaction.user.name)[1]
+    maps["player"] = user_json["users"][user_index]["osu_username"]
+    maps["discord_id"] = interaction.user.name
+    maps["phase"] = phase
+    maps["defense_attempts"] = 0
+    maps["attack_attempts"] = 0
+    
+    match_json["matches"][match_index] = maps
+    index = -1
+  
+    for j in match_json["matches"].values():
+        index = -1
+        for v in j.values():
+            index += 1
+            if (v == user_json["users"][user_index]["osu_username"] and j["phase"] == "defense") and  index == 5:
+                match_json["matches"][match_index]["defense_attempts"] += 1
+            if (v == user_json["users"][user_index]["osu_username"] and j["phase"] == "attack") and  index == 5:
+                match_json["matches"][match_index]["attack_attempts"] += 1
+    
+    if (match_json["matches"][match_index]["defense_attempts"] > 3 or match_json["matches"][match_index]["attack_attempts"] > 2):
+        return False
+    
+    json_object = json.dumps(match_json, indent=4, default=dict)
+
+    with open("matchdb.json", "w") as outfile:
+        outfile.write(json_object)
+
+    return True
+
+class Menu(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+    
+    @discord.ui.button(label="Confirm", style=discord.ButtonStyle.green)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        button.disabled = True
+
+        await interaction.response.defer(ephemeral=True)
+        await asyncio.sleep(4)
+        await interaction.followup.send("Match confirmed! Invites will be sent soon. If you did not get it or lost the invite then DM fooders `.invite` on osu! for another link.")
+        
+        server = Thread(target=runServer)
+        server.start()
+        
+    @discord.ui.button(label="Deny", style=discord.ButtonStyle.red)
+    async def deny(self, interaction: discord.Interaction, button: discord.ui.Button):
+        button.disabled = True
+
+        with open("matchdb.json", "r") as openfile:
+            match_json = json.load(openfile)
+        
+        match_json["matches"].popitem()
+        json_object = json.dumps(match_json, indent=4, default=dict)
+
+        with open("matchdb.json", "w") as outfile:
+            outfile.write(json_object)
+        
+        await interaction.response.defer(ephemeral=True)
+        await asyncio.sleep(4)
+        await interaction.followup.send("Match setup has been cancelled.")
+        
 
 '''
 @client.event
@@ -44,115 +146,6 @@ async def help(ctx): #Lists all possible commands that the user can call
                                                                                           '▸ **stats** (args: *link*, *player name*): Lists the maps played and scores of an individual player, as well as their total and average scores.\n_ _\n'
                                                                                           '▸ **map** (args: *link*, *keyword*): Given a keyword, searches for a map within the mp link and displays the scores for each player as well as the total and average score for that map. If teamvs enabled, shows total and averages for both teams.', inline=False)
     await ctx.send(embed=embed)
-
-@client.event
-async def on_ready(): #Displays the number of servers the bot is running on in its activity status
-    server_count = 0
-    for guild in client.guilds:
-        server_count += 1
-    status = discord.Game('Running on ' + str(server_count) + ' servers')
-    await client.change_presence(activity=status)
-
-'''
-@client.command(pass_context=True)
-async def scores(ctx, link: str, warmup: str): #TODO: rewrite formula in numpy/debug
-    Calculates the total score and match cost of every player in the lobby given through a osu multiplayer link
-
-    Parameters
-    ----------
-    ctx:
-    link:
-    warmup:
-
-    player_ids = []
-    players = []
-    player_scores = []
-    map_scores = []
-    averages = []
-    ratings = []
-    games = []
-    all_maps_played = []
-    individual_scores = []
-    map_avgs = []
-    map_max_score = -1
-    avg_top_scores = 0
-    highest_rating_index = 0
-    cmp = 0
-    highest_avg = 0
-    highest_avg_per_map = 0
-    response = mpcalc.get_mp_data(link)
-    #pool_ids = mpcalc.get_mappool(response)
-
-    games = response['games']
-    if int(warmup) > 0:
-        for m in range(0, int(warmup)):
-            del games[0]
-
-    for game in games:
-        for score in game['scores']:
-            if score['user_id'] not in player_ids:
-                player_ids.append(score['user_id'])
-
-    for k in range(len(player_ids)):
-        received_player = mpcalc.get_player_score(response, games, True, False, False, player_id=player_ids[k])
-        individual_scores.append(mpcalc.get_player_score(response, games, False, True, False, player_id=player_ids[k]))
-        player_scores.append(received_player)
-        players.append(mpcalc.get_username(player_ids[k]))
-    for r in range(len(player_ids)):
-        numerator = 0
-        denominator = len(individual_scores[r])
-        map_total = 0
-        map_avg = 0
-        avg_total = 0
-        mid = 0
-        median = 0
-        swapped = True
-        for n in range(len(individual_scores[r])):
-            for game in games:
-                map_scores = (mpcalc.get_player_score(response, games, False, True, True, map=game['beatmap_id']))
-                for i in range(len(player_ids)):
-                    map_total = 0
-                    if player_ids[i] in map_scores:
-                        map_total += int(map_scores[player_ids[i]]['score'])
-                    all_maps_played.append(len(individual_scores[i]))
-                if player_ids[r] in map_scores:
-                    map_avg = map_total / (len(map_scores))
-                    numerator += int(map_scores[player_ids[r]]['score'])/(map_avg)
-        while swapped:
-            swapped = False
-            for i in range(len(all_maps_played)-1):
-                if all_maps_played[i] > all_maps_played[i+1]:
-                    all_maps_played[i], all_maps_played[i+1] = all_maps_played[i+1], all_maps_played[i]
-                    swapped = True
-        mid = int(len(all_maps_played)/2)
-        median = all_maps_played[mid] if len(all_maps_played) % 2 != 0 else (all_maps_played[mid - 1] + all_maps_played[mid])/2
-        ratings.append(round(((numerator/denominator)*(pow(denominator/median, (1/3)))),  2))
-    for x in range(len(ratings)):
-        if ratings[x] > ratings[highest_rating_index]:
-            highest_rating_index = x
-    colon_index = mpcalc.get_colon_index(response)
-    embed = discord.Embed(
-        title=response['match']['name'][:colon_index],
-        description = response['match']['name'][colon_index + 1:],
-        colour = discord.Color.blue()
-    )
-
-    user = ctx.author
-    embed.set_author(name='Match scores for '+response['match']['name'][:colon_index], icon_url=user.avatar)
-    embed.set_thumbnail(url='https://a.ppy.sh/'+player_ids[highest_rating_index])
-    for i in range(len(players)):
-        embed.add_field(name=players[i], value='▸ **'+player_scores[i][players[i]]+'** ▸ Match cost: **'+str(ratings[i])+'**', inline=False)
-    embed.add_field(name='Match history:', value=link)
-    await ctx.send(embed=embed)
-
-
-@scores.error #Error message to be sent if the user input is invalid
-async def scores_error(ctx, error):
-    if isinstance(error, discord.ext.commands.errors.MissingRequiredArgument):
-        await ctx.send('No link found.')
-    if isinstance(error, discord.ext.commands.errors.CommandInvokeError):
-        await ctx.send('Invalid link. (If argument is a match link and this shows up, pool is not in the database)')
-'''
 
 @client.command(pass_context=True)
 async def stats(ctx, link: str, player: str, warmup: str): 
@@ -231,7 +224,7 @@ async def stats(ctx, link: str, player: str, warmup: str):
                                                         scores[map_ids[n]]['100']+'/'+
                                                         scores[map_ids[n]]['50']+'/'+
                                                         scores[map_ids[n]]['miss'], inline=False)
-    embed.add_field(name='_ _', value='Total score: **'+str(total)+'**\nAverage score: **'+str(int(average))+'**\nAverage accuracy: **'+str(avg_acc)+'%**\nMatch cost: **'+str(rating)+'**', inline=False)
+    embed.add_field(name='_ _', value='Total score: **'+str(total)+'**\nAverage score: **'+str(int(average))+'**\nAverage accuracy: **'+str(avg_acc)+'%**', inline=False)
     embed.add_field(name='Match history:', value=link)
     await ctx.send(embed=embed)
 
@@ -530,6 +523,90 @@ async def drop(ctx, stage: str, slot: str):
         text = "Sorry <@" + str(user.id) + ">, you do not have permissions to do that!".format(ctx.message.author)
         await ctx.send(text)
 
+@client.tree.command(name="attack", description="Start an attack lobby on an opposing clan")
+async def start_attack(interaction: discord.Interaction, map1: str, map2: str, map3: str, map4: str, map5: str):
+    view = Menu()
+    phase = "attack"
+    mods = ["NM", "HD", "HR", "DT"]
+    hasMod = {
+        map1: False,
+        map2: False,
+        map3: False,
+        map4: False,
+        map5: False
+    }
+
+    for mod in mods:
+        for map in hasMod:
+            if mod in map and len(map) == 3 and map[2].isdigit():
+                if mod == "NM" and int(map[2]) <= 5:
+                    hasMod[map] = True
+                elif int(map[2]) <= 2:
+                    hasMod[map] = True
+                
+    try:
+        if (False in hasMod.values()):
+            await interaction.response.send_message("Please input a valid map from the mappool (i.e.: NM1, NM2, etc.)")
+        elif add_match(interaction, map1, map2, map3, map4, map5, phase):
+            await interaction.response.send_message(f"Press confirm to start your clan attack. Make sure you are online on osu! to receive the invite. (Maps: {map1}, {map2}, {map3}, {map4}, {map5})", view=view)
+        else:
+            await interaction.response.send_message("You have reached your max amount of attack attempts.")
+    except TypeError:
+        await interaction.response.send_message("Your osu! account is unlinked, use `/osu-link <username>` to link your account first.")
+
+@client.tree.command(name="defend", description="Start a defense lobby")
+async def start_defense(interaction: discord.Interaction, map1: str, map2: str, map3: str, map4: str, map5: str):
+    view = Menu()
+    phase = "defense"
+    mods = ["NM", "HD", "HR", "DT"]
+    hasMod = {
+        map1: False,
+        map2: False,
+        map3: False,
+        map4: False,
+        map5: False
+    }
+
+    for mod in mods:
+        for map in hasMod:
+            if mod in map and len(map) == 3 and map[2].isdigit():
+                if mod == "NM" and int(map[2]) <= 5:
+                    hasMod[map] = True
+                elif int(map[2]) <= 2:
+                    hasMod[map] = True
+                
+    try:
+        if (False in hasMod.values()):
+            await interaction.response.send_message("Please input a valid map from the mappool (i.e.: NM1, NM2, etc.)")
+        elif add_match(interaction, map1, map2, map3, map4, map5, phase):
+            await interaction.response.send_message(f"Press confirm to start your clan defense. Make sure you are online on osu! to receive the invite. (Maps: {map1}, {map2}, {map3}, {map4}, {map5})", view=view)
+        else:
+            await interaction.response.send_message("You have reached your max amount of defense attempts.")
+    except TypeError:
+        await interaction.response.send_message("Your osu! account is unlinked, use `/osu-link <username>` to link your account first.")
+
+@client.tree.command(name="osu-link", description="Link your osu! account to Noble")
+async def osu_link(interaction: discord.Interaction, username: str):
+    with open("userdb.json", "r") as openfile:
+        user_json = json.load(openfile)
+
+    if (user_json["users"] == {}):
+        user_index = 0
+    else:
+        user_index = str(int(list(user_json["users"])[-1])+1)
+   
+    user_json["users"][user_index] = {
+        "discord": f"{interaction.user.name}", 
+        "osu_username": f"{username}"
+    }
+
+    json_object = json.dumps(user_json, indent=4, default=dict)
+
+    with open("userdb.json", "w") as outfile:
+        outfile.write(json_object)
+    
+    await interaction.response.send_message(f"Successfully linked your account to osu username `{username}`")
+    
 @drop.error
 async def drop_error(ctx, error): #Error message to be sent if the user input is invalid
     if isinstance(error, discord.ext.commands.errors.MissingRequiredArgument):
@@ -541,5 +618,15 @@ async def on_ready():
     print(client.user.name)
     print(client.user.id)
     print('------')
+    server_count = 0
+    for guild in client.guilds:
+        server_count += 1
+    status = discord.Game('Running on ' + str(server_count) + ' servers')
+    await client.change_presence(activity=status)
+    try:
+        synced = await client.tree.sync()
+        print(f"synced {len(synced)} command(s)")
+    except Exception as e:
+        print(e)
 
 client.run(TOKEN)
