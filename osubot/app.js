@@ -9,18 +9,23 @@ const dotenv = require('dotenv').config( {
 const serviceAccountKeyFile = `${process.env.SERVICE_ACCT_FILE}`;
 const sheetId = `${process.env.GOOGLE_SHEET_ID}`;
 const mapRange = "C4:O";
+const backgroundColor = { red: 0, green: 0, blue: 0 };
 
 const config = require('./config.json');
 const matchdb = require('../matchdb.json');
 const api = new nodesu.Client(config.apiKey);
 
-let mapOrder = [matchdb.matches[Object.keys(matchdb.matches)[Object.keys(matchdb.matches).length - 1]].map1, 
-matchdb.matches[Object.keys(matchdb.matches)[Object.keys(matchdb.matches).length - 1]].map2, 
-matchdb.matches[Object.keys(matchdb.matches)[Object.keys(matchdb.matches).length - 1]].map3, 
-matchdb.matches[Object.keys(matchdb.matches)[Object.keys(matchdb.matches).length - 1]].map4, 
-matchdb.matches[Object.keys(matchdb.matches)[Object.keys(matchdb.matches).length - 1]].map5];
+const date = new Date()
+let utc = date.toUTCString()
+
+let match = matchdb.matches[Object.keys(matchdb.matches)[Object.keys(matchdb.matches).length - 1]];
+let mapOrder = [match.map1, match.map2, match.map3, match.map4, match.map5];
+let scoreIndex = 0;
+let rowIndex = 0;
+let accIndex = 0;
 let mapIndex = 0;
 let mapsPlayed = 0;
+let data = [[]];  
 
 const client = new Banchojs.BanchoClient(config);
 
@@ -47,8 +52,35 @@ async function _readGoogleSheet(googleSheetClient, sheetId, tabName, range) {
   return res.data.values;
 }
 
+async function _writeGoogleSheet(googleSheetClient, sheetId, tabName, range, data) {
+  await googleSheetClient.spreadsheets.values.append({
+    spreadsheetId: sheetId,
+    range: `${tabName}!${range}`,
+    valueInputOption: "USER_ENTERED",
+    insertDataOption: "OVERWRITE",
+    resource: {
+      "majorDimension": "ROWS",
+      "values": data
+    },
+  })
+}
+
+async function updateScores(googleSheetClient, sheetId, tabName, range, data) {
+  await googleSheetClient.spreadsheets.values.update({
+    spreadsheetId: sheetId,
+    range: `${tabName}!${range}`,
+    valueInputOption: "USER_ENTERED",
+    resource: {
+      "majorDimension": "ROWS",
+      "values": data
+    },
+  })
+}
+
 async function startOsuBot() {
     let poolTab = "testpool";
+    const googleSheetClient = await _getGoogleSheetClient();
+    const mappool = await _readGoogleSheet(googleSheetClient, sheetId, poolTab, mapRange);
 
     try {
         await client.connect();
@@ -62,21 +94,46 @@ async function startOsuBot() {
 
     lobby = channel.lobby;
     
+    const mpLink = `https://osu.ppy.sh/mp/${lobby.id}`
     const password = Math.random().toString(36).substring(8);
     await lobby.setPassword(password);
     console.log("Lobby created!");
     console.log(`Name: ${lobby.name}, password: ${password}`);
-    console.log(`Multiplayer link: https://osu.ppy.sh/mp/${lobby.id}`);
+    console.log(`Multiplayer link: ${mpLink}`);
     
+    data[0][0] = utc;
+    data[0][1] = mpLink;
+    data[0][2] = match.player;
+    
+    let j = 0;
+    if (match.phase === "defender") {
+      data[0][3] = match.defense_attempts;
+      j = 5;
+      scoreIndex = 6;
+      accIndex = 7;
+    } else if (match.phase === "attacker") {
+      data[0][3] = match.attack_attempts;
+      data[0][5] = match.defender;
+      j = 7
+      scoreIndex = 8;
+      accIndex = 9;
+    }
+    
+    for (let i = 0; i < mapOrder.length; i++) {
+      data[0][j] = mapOrder[i];
+      j += 3;
+    }
+    
+    updateData(); 
     lobby.setSettings(Banchojs.BanchoLobbyTeamModes.HeadToHead, Banchojs.BanchoLobbyWinConditions.ScoreV2, 10);
     setBeatmap(mapOrder[mapsPlayed], poolTab);
     await lobby.invitePlayer(matchdb.matches[Object.keys(matchdb.matches)[Object.keys(matchdb.matches).length - 1]].player);
-    createListeners(mappool, lobby.id);   
+    createListeners(mappool, lobby.id, poolTab);   
 }
 
-async function setBeatmap(slot, matchId) {
+async function setBeatmap(slot, poolTab) {
     const googleSheetClient = await _getGoogleSheetClient();
-    const mappool = await _readGoogleSheet(googleSheetClient, sheetId, matchId, mapRange);
+    const mappool = await _readGoogleSheet(googleSheetClient, sheetId, poolTab, mapRange);
     let rowIndex = 0;
 
     for (let i = 0; i < mappool.length; i++) {
@@ -101,16 +158,67 @@ async function setBeatmap(slot, matchId) {
     lobby.setMods(mod, false);
 }
 
-async function compareObjects(mp, mappool, mapIndex, mapsPlayed){
+async function updateData(updatingScores) {
+    const googleSheetClient = await _getGoogleSheetClient();
+    const sheet = await _readGoogleSheet(googleSheetClient, sheetId, match.phase, "A3:V");
+
+    if(sheet != undefined && !updatingScores) {
+      for (let i = 0; i < sheet.length; i++) {
+          rowIndex++;
+      }
+    }
+
+    if(!updatingScores) {
+      _writeGoogleSheet(googleSheetClient, sheetId, match.phase, `A${+rowIndex+3}:V${+rowIndex+3}`, data);
+    } else {
+      updateScores(googleSheetClient, sheetId, match.phase, `A${+rowIndex+3}:V${+rowIndex+3}`, data);
+    }
+}
+
+async function compareObjects(mp, mappool, mapIndex, mapsPlayed) {
     const multi = await api.multi.getMatch(mp);
     const scoreJson = multi.games[mapIndex].scores;
-    let objectSum = +scoreJson[0].count50 + +scoreJson[0].count100 + +scoreJson[0].count300 + +scoreJson[0].countmiss;
-    let totalObjects = mappool[mapsPlayed][11];
-    let difference = objectSum / totalObjects;
+    let objectSum = 0;
+    let totalObjects = 0;
+    let difference = 0;
+    let rowIndex = 0;
+
+    for (let i = 0; i < mappool.length; i++) {
+      if (mappool[i][0] === mapOrder[mapsPlayed]) {
+        rowIndex = i;
+        break;
+      }
+    }
+    
+    try {
+      objectSum = +scoreJson[0].count50 + +scoreJson[0].count100 + +scoreJson[0].count300 + +scoreJson[0].countmiss;
+      totalObjects = mappool[rowIndex][11];
+      difference = objectSum / totalObjects;
+    } catch (error) {
+      console.error(error);
+    }
+    
     return difference;
 }
 
-function createListeners(mappool, mp) {
+async function getScoreData(mp, mapIndex) {
+    const multi = await api.multi.getMatch(mp);
+    const scoreJson = multi.games[mapIndex].scores;
+    let objectSum = +scoreJson[0].count50 + +scoreJson[0].count100 + +scoreJson[0].count300 + +scoreJson[0].countmiss;
+    let accuracy = 100*((+50*scoreJson[0].count50 + +100*scoreJson[0].count100 + +300*scoreJson[0].count300) / (300*objectSum));
+    let roundedAcc = Math.round(accuracy * 100) / 100;
+    let accString = `${roundedAcc.toString()}%`;
+    let result = [scoreJson[0].score, accString];
+
+    return result;
+}
+
+async function closeLobby() {
+  await lobby.closeLobby();
+  await client.disconnect();
+}
+
+function createListeners(mappool, mp, poolTab) {
     lobby.on("playerJoined", (obj) => {
         const name = obj.player.user.username;
         console.log(`Player ${name} has joined!`);
@@ -129,6 +237,7 @@ function createListeners(mappool, mp) {
 
     lobby.on("matchFinished", async () => {
         mapIndex++;
+
         compareObjects(mp, mappool, (mapIndex-1), mapsPlayed).then((value) => {
           if (value < 0.80) {
             console.log("Current map has been aborted.");
@@ -136,17 +245,29 @@ function createListeners(mappool, mp) {
           } else {
             mapsPlayed++;
             if (mapsPlayed <= 4) {
+              getScoreData(mp, (mapIndex-1)).then((value) => {
+                data[0][scoreIndex] = value[0];
+                data[0][accIndex] = value[1];
+                updateData(true);
+                scoreIndex += 3;
+                accIndex += 3;
+              });
+              
+              
               channel.sendMessage("Map complete, score has been recorded!");
-              setBeatmap(mapOrder[mapsPlayed], matchId);
-            }
+              setBeatmap(mapOrder[mapsPlayed], poolTab);
+            } else if (mapsPlayed > 4) {
+                getScoreData(mp, (mapIndex-1)).then((value) => {
+                  data[0][scoreIndex] = value[0];
+                  data[0][accIndex] = value[1];
+                  updateData(true);
+                });
+                console.log("Closing lobby and disconnecting...");
+                channel.sendMessage("Lobby has been completed! GGWP!");
+                closeLobby();
+            }           
           } 
         });
-        if (mapsPlayed > 4) {
-          console.log("Closing lobby and disconnecting...");
-          channel.sendMessage("Lobby has been completed! GGWP!");
-	        await lobby.closeLobby();
-	        await client.disconnect();
-        }           
     });
 
     channel.on("message", async (msg) => {
@@ -171,11 +292,11 @@ function createListeners(mappool, mp) {
 
       switch(command) {
         case prefix + "invite":
-          if (user.ircUsername === matches[Object.keys(matchdb.matches)[Object.keys(matchdb.matches).length - 1]].player) {
-            console.log(`Inviting ${matches[Object.keys(matchdb.matches)[Object.keys(matchdb.matches).length - 1]].player}`);
-            await lobby.invitePlayer(matches[Object.keys(matchdb.matches)[Object.keys(matchdb.matches).length - 1]].player);
+          if (user.ircUsername === match.player) {
+            console.log(`Inviting ${match.player}`);
+            await lobby.invitePlayer(match.player);
           }
       }
     }); 
 }
-startOsuBot("testpool");
+startOsuBot();

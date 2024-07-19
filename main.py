@@ -4,6 +4,7 @@ import discord
 import mpcalc
 import sheets
 import os
+from dotenv import load_dotenv
 import asyncio
 from threading import Thread
 import subprocess
@@ -14,6 +15,8 @@ from discord.ext.commands import Bot
 from discord import app_commands
 #from discord.ext.commands import tasks
 
+load_dotenv()
+
 BOT_PREFIX = "-"
 TOKEN = os.environ.get('DISCORD_BOT_TOKEN')
 MSG_SENT = False
@@ -21,11 +24,12 @@ intents = discord.Intents.all()
 intents.members = True
 client = Bot(command_prefix=BOT_PREFIX, intents=intents)
 client.remove_command('help')
+commands = []
 
 def runServer():
+    commands.append(["node", "./osubot/app.js"])
     print('Starting server...\n')
-    output = subprocess.run(["node", "./osubot/app.js"]) 
-    print('Done running server...')
+    output = subprocess.Popen(commands[-1]) 
 
 def get_dict_value(nested_dict, value, prepath=()):
     for k, v in nested_dict.items():
@@ -37,14 +41,22 @@ def get_dict_value(nested_dict, value, prepath=()):
             if p is not None:
                 return p
             
-def add_match(interaction: discord.Interaction, map1: str, map2: str, map3: str, map4: str, map5: str, phase: str):
+def add_match(interaction: discord.Interaction, map1: str, map2: str, map3: str, map4: str, map5: str, phase: str, defender: str):
     maps = {
-        "map1": map1,
-        "map2": map2,
-        "map3": map3,
-        "map4": map4,
-        "map5": map5,
+        "map1": map1.upper(),
+        "map2": map2.upper(),
+        "map3": map3.upper(),
+        "map4": map4.upper(),
+        "map5": map5.upper(),
     }
+
+    rev_dict = {}
+ 
+    for key, value in maps.items():
+        rev_dict.setdefault(value, set()).add(key)
+     
+    result = [key for key, values in rev_dict.items()
+                              if len(values) > 1]
         
     with open("userdb.json", "r") as openfile:
         user_json = json.load(openfile)
@@ -61,6 +73,8 @@ def add_match(interaction: discord.Interaction, map1: str, map2: str, map3: str,
     maps["phase"] = phase
     maps["defense_attempts"] = 0
     maps["attack_attempts"] = 0
+    if phase == "attacker":
+        maps["defender"] = defender
     
     match_json["matches"][match_index] = maps
     index = -1
@@ -69,17 +83,17 @@ def add_match(interaction: discord.Interaction, map1: str, map2: str, map3: str,
         index = -1
         for v in j.values():
             index += 1
-            if (v == user_json["users"][user_index]["osu_username"] and j["phase"] == "defense") and  index == 5:
+            if (v == user_json["users"][user_index]["osu_username"] and j["phase"] == "defender") and  index == 5:
                 match_json["matches"][match_index]["defense_attempts"] += 1
-            if (v == user_json["users"][user_index]["osu_username"] and j["phase"] == "attack") and  index == 5:
+            if (v == user_json["users"][user_index]["osu_username"] and j["phase"] == "attacker") and  index == 5:
                 match_json["matches"][match_index]["attack_attempts"] += 1
     
-    if (match_json["matches"][match_index]["defense_attempts"] > 3 or match_json["matches"][match_index]["attack_attempts"] > 2):
+    if (match_json["matches"][match_index]["defense_attempts"] > 3 or match_json["matches"][match_index]["attack_attempts"] > 2 or result != []):
         return False
     
     json_object = json.dumps(match_json, indent=4, default=dict)
-
-    with open("matchdb.json", "w") as outfile:
+    
+    with open("temp.json", "w") as outfile:
         outfile.write(json_object)
 
     return True
@@ -91,30 +105,39 @@ class Menu(discord.ui.View):
     @discord.ui.button(label="Confirm", style=discord.ButtonStyle.green)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
         button.disabled = True
-
-        await interaction.response.defer(ephemeral=True)
-        await asyncio.sleep(4)
-        await interaction.followup.send("Match confirmed! Invites will be sent soon. If you did not get it or lost the invite then DM fooders `.invite` on osu! for another link.")
         
-        server = Thread(target=runServer)
-        server.start()
+        try:
+            with open("temp.json", "r") as openfile:
+                match_json = json.load(openfile)
+            
+            os.remove("temp.json")
+            json_object = json.dumps(match_json, indent=4, default=dict)
+            
+            with open("matchdb.json", "w") as outfile:
+                outfile.write(json_object)
+  
+            await interaction.response.defer(ephemeral=True)
+            await asyncio.sleep(4)
+            await interaction.followup.send("Match confirmed! Invites will be sent soon. If you did not get it or lost the invite then DM fooders `.invite` on osu! for another link.")
+            
+            server = Thread(target=runServer)
+            server.start()
+        except FileNotFoundError:
+            await interaction.followup.send("Slow down! You are spamming the button too much.")
+
         
     @discord.ui.button(label="Deny", style=discord.ButtonStyle.red)
     async def deny(self, interaction: discord.Interaction, button: discord.ui.Button):
         button.disabled = True
 
-        with open("matchdb.json", "r") as openfile:
-            match_json = json.load(openfile)
+        try:
+            os.remove("temp.json")
         
-        match_json["matches"].popitem()
-        json_object = json.dumps(match_json, indent=4, default=dict)
-
-        with open("matchdb.json", "w") as outfile:
-            outfile.write(json_object)
-        
-        await interaction.response.defer(ephemeral=True)
-        await asyncio.sleep(4)
-        await interaction.followup.send("Match setup has been cancelled.")
+            await interaction.response.defer(ephemeral=True)
+            await asyncio.sleep(4)
+            await interaction.followup.send("Match setup has been cancelled.")
+        except FileNotFoundError:
+            await interaction.followup.send("Slow down! You are spamming the button too much.")
         
 
 '''
@@ -524,10 +547,10 @@ async def drop(ctx, stage: str, slot: str):
         await ctx.send(text)
 
 @client.tree.command(name="attack", description="Start an attack lobby on an opposing clan")
-async def start_attack(interaction: discord.Interaction, map1: str, map2: str, map3: str, map4: str, map5: str):
+async def start_attack(interaction: discord.Interaction, defender: str, map1: str, map2: str, map3: str, map4: str, map5: str):
     view = Menu()
-    phase = "attack"
-    mods = ["NM", "HD", "HR", "DT"]
+    phase = "attacker"
+    mods = ["nm", "hd", "hr", "dt"]
     hasMod = {
         map1: False,
         map2: False,
@@ -538,8 +561,8 @@ async def start_attack(interaction: discord.Interaction, map1: str, map2: str, m
 
     for mod in mods:
         for map in hasMod:
-            if mod in map and len(map) == 3 and map[2].isdigit():
-                if mod == "NM" and int(map[2]) <= 5:
+            if mod in map.lower() and len(map) == 3 and map[2].isdigit():
+                if mod == "nm" and int(map[2]) <= 5:
                     hasMod[map] = True
                 elif int(map[2]) <= 2:
                     hasMod[map] = True
@@ -547,18 +570,18 @@ async def start_attack(interaction: discord.Interaction, map1: str, map2: str, m
     try:
         if (False in hasMod.values()):
             await interaction.response.send_message("Please input a valid map from the mappool (i.e.: NM1, NM2, etc.)")
-        elif add_match(interaction, map1, map2, map3, map4, map5, phase):
+        elif add_match(interaction, map1, map2, map3, map4, map5, phase, defender):
             await interaction.response.send_message(f"Press confirm to start your clan attack. Make sure you are online on osu! to receive the invite. (Maps: {map1}, {map2}, {map3}, {map4}, {map5})", view=view)
         else:
-            await interaction.response.send_message("You have reached your max amount of attack attempts.")
+            await interaction.response.send_message("Please check if you have entered any duplicate maps or if you have already attacked 2 times.")
     except TypeError:
         await interaction.response.send_message("Your osu! account is unlinked, use `/osu-link <username>` to link your account first.")
 
 @client.tree.command(name="defend", description="Start a defense lobby")
 async def start_defense(interaction: discord.Interaction, map1: str, map2: str, map3: str, map4: str, map5: str):
     view = Menu()
-    phase = "defense"
-    mods = ["NM", "HD", "HR", "DT"]
+    phase = "defender"
+    mods = ["nm", "hd", "hr", "dt"]
     hasMod = {
         map1: False,
         map2: False,
@@ -569,19 +592,19 @@ async def start_defense(interaction: discord.Interaction, map1: str, map2: str, 
 
     for mod in mods:
         for map in hasMod:
-            if mod in map and len(map) == 3 and map[2].isdigit():
-                if mod == "NM" and int(map[2]) <= 5:
+            if mod in map.lower() and len(map) == 3 and map[2].isdigit():
+                if mod == "nm" and int(map[2]) <= 5:
                     hasMod[map] = True
                 elif int(map[2]) <= 2:
                     hasMod[map] = True
-                
+
     try:
         if (False in hasMod.values()):
             await interaction.response.send_message("Please input a valid map from the mappool (i.e.: NM1, NM2, etc.)")
-        elif add_match(interaction, map1, map2, map3, map4, map5, phase):
+        elif add_match(interaction, map1, map2, map3, map4, map5, phase, ""):
             await interaction.response.send_message(f"Press confirm to start your clan defense. Make sure you are online on osu! to receive the invite. (Maps: {map1}, {map2}, {map3}, {map4}, {map5})", view=view)
         else:
-            await interaction.response.send_message("You have reached your max amount of defense attempts.")
+            await interaction.response.send_message("Please check if you have entered any duplicate maps or if you have already defended 3 times.")
     except TypeError:
         await interaction.response.send_message("Your osu! account is unlinked, use `/osu-link <username>` to link your account first.")
 

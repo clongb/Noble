@@ -1,4 +1,4 @@
-from commands import on_ready
+from main import on_ready
 import asyncio
 import discord
 import pytest
