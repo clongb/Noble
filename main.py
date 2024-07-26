@@ -10,10 +10,12 @@ from threading import Thread
 import subprocess
 import time
 import json
+import string
+import random
 
 from discord.ext.commands import Bot
 from discord import app_commands
-#from discord.ext.commands import tasks
+from discord.ext import tasks, commands
 
 load_dotenv()
 
@@ -24,12 +26,24 @@ intents = discord.Intents.all()
 intents.members = True
 client = Bot(command_prefix=BOT_PREFIX, intents=intents)
 client.remove_command('help')
-commands = []
+node_processes = []
+observers = []
+verifications = []
 
-def runServer():
-    commands.append(["node", "./osubot/app.js"])
+def run_verification():
+    verifications.append(subprocess.Popen(["node", "./osubot/verification.js"]))
+    print('Starting verification...\n')
+    output = verifications[-1]
+
+def run_node_server():
+    node_processes.append(subprocess.Popen(["node", "./osubot/app.js"]))
     print('Starting server...\n')
-    output = subprocess.Popen(commands[-1]) 
+    output = node_processes[-1]
+
+def run_observer():
+    observers.append(["python", "./fileobserver.py"])
+    print('Starting observer...\n')
+    output = subprocess.Popen(observers[-1]) 
 
 def get_dict_value(nested_dict, value, prepath=()):
     for k, v in nested_dict.items():
@@ -88,7 +102,7 @@ def add_match(interaction: discord.Interaction, map1: str, map2: str, map3: str,
             if (v == user_json["users"][user_index]["osu_username"] and j["phase"] == "attacker") and  index == 5:
                 match_json["matches"][match_index]["attack_attempts"] += 1
     
-    if (match_json["matches"][match_index]["defense_attempts"] > 3 or match_json["matches"][match_index]["attack_attempts"] > 2 or result != []):
+    if (match_json["matches"][match_index]["defense_attempts"] > 2 or match_json["matches"][match_index]["attack_attempts"] > 2 or result != []):
         return False
     
     json_object = json.dumps(match_json, indent=4, default=dict)
@@ -113,17 +127,23 @@ class Menu(discord.ui.View):
             os.remove("temp.json")
             json_object = json.dumps(match_json, indent=4, default=dict)
             
-            with open("matchdb.json", "w") as outfile:
-                outfile.write(json_object)
-  
             await interaction.response.defer(ephemeral=True)
             await asyncio.sleep(4)
-            await interaction.followup.send("Match confirmed! Invites will be sent soon. If you did not get it or lost the invite then DM fooders `.invite` on osu! for another link.")
             
-            server = Thread(target=runServer)
-            server.start()
+            if not node_processes:
+                with open("matchdb.json", "w") as outfile:
+                    outfile.write(json_object)
+                server = Thread(target=run_node_server)
+                await interaction.followup.send("Match confirmed! Invites will be sent soon. If you did not get it or lost the invite, DM fooders `.invite` on osu! for another link.", ephemeral=True)
+                server.start()
+            else:
+                 #json_object["matches"].pop("0")
+                 with open("matchdb.json", "w") as outfile:
+                    outfile.write(json_object)
+                 await interaction.followup.send("There is currently a lobby in progress. Please wait until it's finished.", ephemeral=True)
+    
         except FileNotFoundError:
-            await interaction.followup.send("Slow down! You are spamming the button too much.")
+            await interaction.followup.send("Slow down! You are spamming the button too much.", ephemeral=True)
 
         
     @discord.ui.button(label="Deny", style=discord.ButtonStyle.red)
@@ -132,12 +152,11 @@ class Menu(discord.ui.View):
 
         try:
             os.remove("temp.json")
-        
             await interaction.response.defer(ephemeral=True)
             await asyncio.sleep(4)
-            await interaction.followup.send("Match setup has been cancelled.")
+            await interaction.followup.send("Match setup has been cancelled.", ephemeral=True)
         except FileNotFoundError:
-            await interaction.followup.send("Slow down! You are spamming the button too much.")
+            await interaction.followup.send("Slow down! You are spamming the button too much.", ephemeral=True)
         
 
 '''
@@ -546,32 +565,30 @@ async def drop(ctx, stage: str, slot: str):
         text = "Sorry <@" + str(user.id) + ">, you do not have permissions to do that!".format(ctx.message.author)
         await ctx.send(text)
 
+@drop.error
+async def drop_error(ctx, error): #Error message to be sent if the user input is invalid
+    if isinstance(error, discord.ext.commands.errors.MissingRequiredArgument):
+        await ctx.send('You did not put a round or map')
+
 @client.tree.command(name="attack", description="Start an attack lobby on an opposing clan")
-async def start_attack(interaction: discord.Interaction, defender: str, map1: str, map2: str, map3: str, map4: str, map5: str):
+async def start_attack(interaction: discord.Interaction, defender: str):
     view = Menu()
     phase = "attacker"
-    mods = ["nm", "hd", "hr", "dt"]
-    hasMod = {
-        map1: False,
-        map2: False,
-        map3: False,
-        map4: False,
-        map5: False
-    }
-
-    for mod in mods:
-        for map in hasMod:
-            if mod in map.lower() and len(map) == 3 and map[2].isdigit():
-                if mod == "nm" and int(map[2]) <= 5:
-                    hasMod[map] = True
-                elif int(map[2]) <= 2:
-                    hasMod[map] = True
                 
+    with open("matchdb.json", "r") as openfile:
+        match_json = json.load(openfile)
+
+    defender_index = get_dict_value(match_json, defender)[1]
+
+    map1 = match_json["matches"][defender_index]["map1"]
+    map2 = match_json["matches"][defender_index]["map2"]
+    map3 = match_json["matches"][defender_index]["map3"]
+    map4 = match_json["matches"][defender_index]["map4"]
+    map5 = match_json["matches"][defender_index]["map5"]
+    
     try:
-        if (False in hasMod.values()):
-            await interaction.response.send_message("Please input a valid map from the mappool (i.e.: NM1, NM2, etc.)")
-        elif add_match(interaction, map1, map2, map3, map4, map5, phase, defender):
-            await interaction.response.send_message(f"Press confirm to start your clan attack. Make sure you are online on osu! to receive the invite. (Maps: {map1}, {map2}, {map3}, {map4}, {map5})", view=view)
+        if add_match(interaction, map1, map2, map3, map4, map5, phase, defender):
+            await interaction.response.send_message(f"Press confirm to start your clan attack. Make sure you are online on osu! to receive the invite.", view=view, ephemeral=True)
         else:
             await interaction.response.send_message("Please check if you have entered any duplicate maps or if you have already attacked 2 times.")
     except TypeError:
@@ -602,38 +619,129 @@ async def start_defense(interaction: discord.Interaction, map1: str, map2: str, 
         if (False in hasMod.values()):
             await interaction.response.send_message("Please input a valid map from the mappool (i.e.: NM1, NM2, etc.)")
         elif add_match(interaction, map1, map2, map3, map4, map5, phase, ""):
-            await interaction.response.send_message(f"Press confirm to start your clan defense. Make sure you are online on osu! to receive the invite. (Maps: {map1}, {map2}, {map3}, {map4}, {map5})", view=view)
+            await interaction.response.send_message(f"Press confirm to start your clan defense. Make sure you are online on osu! to receive the invite. (Maps: {map1}, {map2}, {map3}, {map4}, {map5})", view=view, ephemeral=True)
         else:
-            await interaction.response.send_message("Please check if you have entered any duplicate maps or if you have already defended 3 times.")
+            await interaction.response.send_message("Please check if you have entered any duplicate maps or if you have already defended 2 times.")
     except TypeError:
         await interaction.response.send_message("Your osu! account is unlinked, use `/osu-link <username>` to link your account first.")
 
 @client.tree.command(name="osu-link", description="Link your osu! account to Noble")
 async def osu_link(interaction: discord.Interaction, username: str):
-    with open("userdb.json", "r") as openfile:
-        user_json = json.load(openfile)
-
-    if (user_json["users"] == {}):
-        user_index = 0
-    else:
-        user_index = str(int(list(user_json["users"])[-1])+1)
-   
-    user_json["users"][user_index] = {
-        "discord": f"{interaction.user.name}", 
-        "osu_username": f"{username}"
-    }
-
-    json_object = json.dumps(user_json, indent=4, default=dict)
-
-    with open("userdb.json", "w") as outfile:
-        outfile.write(json_object)
+    with open("code.json", "r") as openfile:
+        code_json = json.load(openfile)
     
-    await interaction.response.send_message(f"Successfully linked your account to osu username `{username}`")
-    
-@drop.error
-async def drop_error(ctx, error): #Error message to be sent if the user input is invalid
-    if isinstance(error, discord.ext.commands.errors.MissingRequiredArgument):
-        await ctx.send('You did not put a round or map')
+    code_json["code"] = ''.join(random.choices(string.ascii_uppercase +
+                             string.digits, k=5))
+    code_json["osu_username"] = username
+    code_json["discord"] = f"{interaction.user.name}"
+    code_json["user_id"] = f"{interaction.user.id}"
+
+    code = code_json["code"]
+    code_object = json.dumps(code_json, indent=4, default=dict)
+
+    with open("code.json", "w") as outfile:
+        outfile.write(code_object)
+
+    server = Thread(target=run_verification)
+    await interaction.response.send_message(f"To complete account verification, please send fooders this code on osu!: `{code}`", ephemeral=True)
+    server.start()
+
+@client.tree.command(name="osu-unlink", description="Unlink your osu! account to Noble")
+async def osu_unlink(interaction: discord.Interaction):
+    try:
+        with open("userdb.json", "r") as openfile:
+            user_json = json.load(openfile)
+        
+        discord_name = interaction.user.name
+
+        user_index = get_dict_value(user_json, discord_name)[1]
+        username = user_json["users"][user_index]["osu_username"]
+        user_json["users"].pop(user_index)
+
+        json_object = json.dumps(user_json, indent=4, default=dict)
+            
+        with open("userdb.json", "w") as outfile:
+                outfile.write(json_object)
+        await interaction.response.send_message(f"Successfully unlinked your osu account `{username}`")
+    except TypeError:
+        await interaction.response.send_message("Could not find user.")
+
+@tasks.loop(seconds=1.0)
+async def logger():
+    channel = client.get_channel(1263685122306347079)
+    logged = False
+
+    if os.path.exists("./templog.txt") and not logged:
+        file = open("templog.txt", "r")
+        templine = file.readline()
+        logged = True
+        file.close()
+        await channel.send(templine)
+    if os.path.exists("./templog.txt") and logged:
+        os.remove("./templog.txt")
+        logged = False
+                
+@tasks.loop(seconds=1.0)
+async def process_check():
+    #channel = client.get_channel(1265881389786730611) public bot channel
+    channel = client.get_channel(1255892723790250118)
+    if node_processes:
+        poll = node_processes[0].poll()
+        if poll is not None:
+            print("Server has been closed")
+            node_processes.pop()
+            #channel.send("The previous lobby has finished")
+
+@tasks.loop(seconds=1.0)
+async def verification_check():
+    channel = client.get_channel(1265881389786730611) #public bot channel
+    #channel = client.get_channel(1255892723790250118) #heheheha
+    if verifications:
+        poll = verifications[0].poll()
+        with open("code.json", "r") as openfile:
+            code_json = json.load(openfile)
+        if poll == 1 and code_json != {}:
+            id = code_json["user_id"]
+            code_json.clear()
+            
+            code_object = json.dumps(code_json, indent=4, default=dict)
+
+            with open("code.json", "w") as outfile:
+                outfile.write(code_object)
+
+            verifications.pop()
+
+            await channel.send(f"<@{id}> Verification has timed out.")
+        elif poll == 0 and code_json != {}:
+            with open("userdb.json", "r") as openfile:
+                user_json = json.load(openfile)
+
+            if (user_json["users"] == {}):
+                user_index = 0
+            else:
+                user_index = str(int(list(user_json["users"])[-1])+1)
+        
+            user_json["users"][user_index] = {
+                "discord": code_json["discord"], 
+                "osu_username": code_json["osu_username"]
+            }
+            id = code_json["user_id"]
+            code_json.clear()
+
+            user_object = json.dumps(user_json, indent=4, default=dict)
+
+            with open("userdb.json", "w") as outfile:
+                outfile.write(user_object)
+
+            code_object = json.dumps(code_json, indent=4, default=dict)
+
+            with open("code.json", "w") as outfile:
+                outfile.write(code_object)
+
+            verifications.pop()    
+            await channel.send(f"<@{id}> Successfully verified your osu! account!")
+            
+
 
 @client.event
 async def on_ready():
@@ -642,14 +750,21 @@ async def on_ready():
     print(client.user.id)
     print('------')
     server_count = 0
+
     for guild in client.guilds:
         server_count += 1
     status = discord.Game('Running on ' + str(server_count) + ' servers')
     await client.change_presence(activity=status)
+
     try:
         synced = await client.tree.sync()
         print(f"synced {len(synced)} command(s)")
     except Exception as e:
         print(e)
-
+    observer = Thread(target=run_observer)
+    observer.start()
+    logger.start()
+    process_check.start()
+    verification_check.start()
+    
 client.run(TOKEN)

@@ -1,15 +1,11 @@
 const Banchojs = require("bancho.js");
 const nodesu = require('nodesu');
 const { google } = require("googleapis");
-const path = require('path');
-const dotenv = require('dotenv').config( {
-    path: path.join(__dirname, '.env')
-} );
+const fs = require('fs');
 
 const serviceAccountKeyFile = `${process.env.SERVICE_ACCT_FILE}`;
 const sheetId = `${process.env.GOOGLE_SHEET_ID}`;
 const mapRange = "C4:O";
-const backgroundColor = { red: 0, green: 0, blue: 0 };
 
 const config = require('./config.json');
 const matchdb = require('../matchdb.json');
@@ -25,6 +21,7 @@ let rowIndex = 0;
 let accIndex = 0;
 let mapIndex = 0;
 let mapsPlayed = 0;
+let cellIncrement = 3;
 let data = [[]];  
 
 const client = new Banchojs.BanchoClient(config);
@@ -65,6 +62,12 @@ async function _writeGoogleSheet(googleSheetClient, sheetId, tabName, range, dat
   })
 }
 
+function log(data) {
+  fs.appendFile('./osubot/log.txt', data, (err) => {
+    if (err) throw err;
+  });
+}
+
 async function updateScores(googleSheetClient, sheetId, tabName, range, data) {
   await googleSheetClient.spreadsheets.values.update({
     spreadsheetId: sheetId,
@@ -84,11 +87,12 @@ async function startOsuBot() {
 
     try {
         await client.connect();
-        console.log("osu!bot Connected...")
+        setTimeout(log, 1000, "------------------------------------\n");
+        setTimeout(log, 3000, "osu!bot Connected...\n");
         channel = await client.createLobby("OCW: Lobby test");
     } catch (err) {
         console.error(err);
-        console.log("Failed to create lobby");
+        setTimeout(log, 3000, "Failed to create lobby\n");
         process.exit(1);
     }
 
@@ -97,9 +101,9 @@ async function startOsuBot() {
     const mpLink = `https://osu.ppy.sh/mp/${lobby.id}`
     const password = Math.random().toString(36).substring(8);
     await lobby.setPassword(password);
-    console.log("Lobby created!");
-    console.log(`Name: ${lobby.name}, password: ${password}`);
-    console.log(`Multiplayer link: ${mpLink}`);
+    setTimeout(log, 5000, "Lobby created!\n");
+    setTimeout(log, 7000, `Name: ${lobby.name}, password: ${password}\n`);
+    setTimeout(log, 9000, `Multiplayer link: <${mpLink}>\n`);
     
     data[0][0] = utc;
     data[0][1] = mpLink;
@@ -111,23 +115,26 @@ async function startOsuBot() {
       j = 5;
       scoreIndex = 6;
       accIndex = 7;
+
+      for (let i = 0; i < mapOrder.length; i++) {
+        data[0][j] = mapOrder[i];
+        j += 3;
+      }
     } else if (match.phase === "attacker") {
       data[0][3] = match.attack_attempts;
       data[0][5] = match.defender;
-      j = 7
-      scoreIndex = 8;
-      accIndex = 9;
+      scoreIndex = 7;
+      accIndex = 8;
+      cellIncrement = 2;
     }
     
-    for (let i = 0; i < mapOrder.length; i++) {
-      data[0][j] = mapOrder[i];
-      j += 3;
-    }
+    
     
     updateData(); 
     lobby.setSettings(Banchojs.BanchoLobbyTeamModes.HeadToHead, Banchojs.BanchoLobbyWinConditions.ScoreV2, 10);
     setBeatmap(mapOrder[mapsPlayed], poolTab);
-    await lobby.invitePlayer(matchdb.matches[Object.keys(matchdb.matches)[Object.keys(matchdb.matches).length - 1]].player);
+    setTimeout(log, 15000, `Inviting player: ${match.player}\n`);
+    await lobby.invitePlayer(match.player);
     createListeners(mappool, lobby.id, poolTab);   
 }
 
@@ -145,9 +152,9 @@ async function setBeatmap(slot, poolTab) {
 
     let name = mappool[rowIndex][1];
     let mapId = mappool[rowIndex][12];
-    console.log("Map info received");
+    setTimeout(log, 11000, "Map info received\n");
     
-    console.log(`Selecting map ${+mapsPlayed+1}: ${name}`);
+    setTimeout(log, 13000, `Selecting map ${+mapsPlayed+1}: ${name}\n`);
     channel.sendMessage(`Selecting map ${+mapsPlayed+1}: ${name}`);
     let mod = slot.slice(0, 2);
     if (mod.includes("NM")) {
@@ -160,8 +167,8 @@ async function setBeatmap(slot, poolTab) {
 
 async function updateData(updatingScores) {
     const googleSheetClient = await _getGoogleSheetClient();
-    const sheet = await _readGoogleSheet(googleSheetClient, sheetId, match.phase, "A3:V");
-
+    const sheet = await _readGoogleSheet(googleSheetClient, sheetId, match.phase, "B3:Z");
+ 
     if(sheet != undefined && !updatingScores) {
       for (let i = 0; i < sheet.length; i++) {
           rowIndex++;
@@ -169,9 +176,9 @@ async function updateData(updatingScores) {
     }
 
     if(!updatingScores) {
-      _writeGoogleSheet(googleSheetClient, sheetId, match.phase, `A${+rowIndex+3}:V${+rowIndex+3}`, data);
+      _writeGoogleSheet(googleSheetClient, sheetId, match.phase, `B${+rowIndex+3}:Z${+rowIndex+3}`, data);
     } else {
-      updateScores(googleSheetClient, sheetId, match.phase, `A${+rowIndex+3}:V${+rowIndex+3}`, data);
+      updateScores(googleSheetClient, sheetId, match.phase, `B${+rowIndex+3}:Z${+rowIndex+3}`, data);
     }
 }
 
@@ -216,12 +223,13 @@ async function getScoreData(mp, mapIndex) {
 async function closeLobby() {
   await lobby.closeLobby();
   await client.disconnect();
+  process.exit()
 }
 
 function createListeners(mappool, mp, poolTab) {
     lobby.on("playerJoined", (obj) => {
         const name = obj.player.user.username;
-        console.log(`Player ${name} has joined!`);
+        log(`Player ${name} has joined!\n`);
 
         if (obj.player.user.isClient()) {
             lobby.setHost("#" + obj.player.user.id);
@@ -229,42 +237,38 @@ function createListeners(mappool, mp, poolTab) {
     });
 
     lobby.on("allPlayersReady", (obj) => {
-        console.log("All players are ready, starting match...");
+        log("All players are ready, starting match...\n");
         channel.sendMessage("All players are ready, starting match in 10 seconds!");
         channel.sendMessage("Type .abort if you would like to abort the timer.");
         lobby.startMatch(10);
      });
 
     lobby.on("matchFinished", async () => {
+        const name = match.player;
         mapIndex++;
 
         compareObjects(mp, mappool, (mapIndex-1), mapsPlayed).then((value) => {
-          if (value < 0.80) {
-            console.log("Current map has been aborted.");
+          if (value < 0.30) {
+            log("Current map has been aborted.\n");
             channel.sendMessage("You've aborted the current map. Ready up and try again!");
           } else {
             mapsPlayed++;
+            getScoreData(mp, (mapIndex-1)).then((value) => {
+              data[0][scoreIndex] = value[0];
+              data[0][accIndex] = value[1];
+              updateData(true);
+              scoreIndex += cellIncrement;
+              accIndex += cellIncrement;
+              log(`Player ${name} has finished map ${+mapsPlayed} (Score: ${value[0]}, ${value[1]})\n`);
+            });
+
             if (mapsPlayed <= 4) {
-              getScoreData(mp, (mapIndex-1)).then((value) => {
-                data[0][scoreIndex] = value[0];
-                data[0][accIndex] = value[1];
-                updateData(true);
-                scoreIndex += 3;
-                accIndex += 3;
-              });
-              
-              
               channel.sendMessage("Map complete, score has been recorded!");
               setBeatmap(mapOrder[mapsPlayed], poolTab);
             } else if (mapsPlayed > 4) {
-                getScoreData(mp, (mapIndex-1)).then((value) => {
-                  data[0][scoreIndex] = value[0];
-                  data[0][accIndex] = value[1];
-                  updateData(true);
-                });
-                console.log("Closing lobby and disconnecting...");
-                channel.sendMessage("Lobby has been completed! GGWP!");
-                closeLobby();
+                log("Closing lobby and disconnecting...\n");
+                channel.sendMessage("Lobby has been completed! GGWP! Closing lobby in 10 seconds...");
+                setTimeout(closeLobby, 10000);
             }           
           } 
         });
@@ -278,8 +282,16 @@ function createListeners(mappool, mp, poolTab) {
       switch(command) {
         case prefix + "abort":
           lobby.abortTimer();
-          console.log("Timer has been aborted.");
+          log("Timer has been aborted.\n");
           channel.sendMessage("Timer has been aborted.");
+      }
+    });
+
+    client.on("PART", async () => {
+      if(!Banchojs.isBanchoLobby(client)) {
+        log("Lobby has been closed.\n");
+        client.disconnect();
+        process.exit()
       }
     });
 
@@ -293,7 +305,7 @@ function createListeners(mappool, mp, poolTab) {
       switch(command) {
         case prefix + "invite":
           if (user.ircUsername === match.player) {
-            console.log(`Inviting ${match.player}`);
+            log(`Inviting ${match.player}\n`);
             await lobby.invitePlayer(match.player);
           }
       }
