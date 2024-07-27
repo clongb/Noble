@@ -166,8 +166,16 @@ async function setBeatmap(slot, poolTab) {
 }
 
 async function updateData(updatingScores) {
+    let column = '';
+    if (match.phase === "attacker") {
+      column = 'R';
+    } else if (match.phase === "defender") {
+      column = 'U';
+    }
+    let range = `B3:${column}`;
+
     const googleSheetClient = await _getGoogleSheetClient();
-    const sheet = await _readGoogleSheet(googleSheetClient, sheetId, match.phase, "B3:Z");
+    const sheet = await _readGoogleSheet(googleSheetClient, sheetId, match.phase, range);
  
     if(sheet != undefined && !updatingScores) {
       for (let i = 0; i < sheet.length; i++) {
@@ -176,9 +184,9 @@ async function updateData(updatingScores) {
     }
 
     if(!updatingScores) {
-      _writeGoogleSheet(googleSheetClient, sheetId, match.phase, `B${+rowIndex+3}:Z${+rowIndex+3}`, data);
+      _writeGoogleSheet(googleSheetClient, sheetId, match.phase, `B${+rowIndex+3}:${column}${+rowIndex+3}`, data);
     } else {
-      updateScores(googleSheetClient, sheetId, match.phase, `B${+rowIndex+3}:Z${+rowIndex+3}`, data);
+      updateScores(googleSheetClient, sheetId, match.phase, `B${+rowIndex+3}:${column}${+rowIndex+3}`, data);
     }
 }
 
@@ -230,9 +238,18 @@ function createListeners(mappool, mp, poolTab) {
     lobby.on("playerJoined", (obj) => {
         const name = obj.player.user.username;
         log(`Player ${name} has joined!\n`);
-
+        
         if (obj.player.user.isClient()) {
-            lobby.setHost("#" + obj.player.user.id);
+          lobby.setHost("#" + obj.player.user.id);
+        } else if (name === match.player) {
+          channel.sendMessage(`Welcome ${name}!`);
+          channel.sendMessage(`You will be recording your clan ${match.phase} scores across 5 maps. As soon as you click ready for each map, the map will start in 10 seconds. If you would like to abort the timer, type '.abort'`);
+          if (match.phase == "defender") {
+            channel.sendMessage(`The map order is as follows: ${mapOrder[0]}, ${mapOrder[1]}, ${mapOrder[2]}, ${mapOrder[3]}, ${mapOrder[4]}.`);
+          } else if (match.phase == "attacker") {
+            channel.sendMessage(`The player you will be attacking is ${match.defender} of ${match.defender_clan}. Their scores to beat are:`);
+            channel.sendMessage(`${mapOrder[0]}: ${match.map1_defense_score}, ${mapOrder[1]}: ${match.map2_defense_score}, ${mapOrder[2]}: ${match.map3_defense_score}, ${mapOrder[3]}: ${match.map4_defense_score}, ${mapOrder[4]}: ${match.map5_defense_score}.`)
+          }
         }
     });
 
@@ -275,9 +292,9 @@ function createListeners(mappool, mp, poolTab) {
     });
 
     channel.on("message", async (msg) => {
-      if (msg[0] !== ".") return;
+      if (msg.message[0] !== ".") return;
 
-      const command = msg.split(" ")[0].toLowerCase();
+      const command = msg.message.split(" ")[0].toLowerCase();
 
       switch(command) {
         case prefix + "abort":
@@ -295,16 +312,16 @@ function createListeners(mappool, mp, poolTab) {
       }
     });
 
-    client.on("PM", async({ msg, user }) => {
-      if (user.ircUsername === USERNAME) return;
+    client.on("PM", async(msg) => {
+      if (msg.user.ircUsername === USERNAME) return;
 
-      if (msg[0] !== ".") return;
+      if (msg.message[0] !== ".") return;
 
-      const command = msg.split(" ")[0].toLowerCase();
+      const command = msg.message.split(" ")[0].toLowerCase();
 
       switch(command) {
         case prefix + "invite":
-          if (user.ircUsername === match.player) {
+          if (msg.user.ircUsername === match.player) {
             log(`Inviting ${match.player}\n`);
             await lobby.invitePlayer(match.player);
           }

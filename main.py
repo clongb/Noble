@@ -54,8 +54,8 @@ def get_dict_value(nested_dict, value, prepath=()):
             p = get_dict_value(v, value, path)
             if p is not None:
                 return p
-            
-def add_match(interaction: discord.Interaction, map1: str, map2: str, map3: str, map4: str, map5: str, phase: str, defender: str):
+
+def add_match(interaction: discord.Interaction, map1: str, map2: str, map3: str, map4: str, map5: str, phase: str, defender: str, defender_clan: str, score1: str, score2: str, score3: str, score4: str, score5: str,):
     maps = {
         "map1": map1.upper(),
         "map2": map2.upper(),
@@ -89,6 +89,12 @@ def add_match(interaction: discord.Interaction, map1: str, map2: str, map3: str,
     maps["attack_attempts"] = 0
     if phase == "attacker":
         maps["defender"] = defender
+        maps["defender_clan"] = defender_clan
+        maps["map1_defense_score"] = score1
+        maps["map2_defense_score"] = score2
+        maps["map3_defense_score"] = score3
+        maps["map4_defense_score"] = score4
+        maps["map5_defense_score"] = score5
     
     match_json["matches"][match_index] = maps
     index = -1
@@ -128,7 +134,7 @@ class Menu(discord.ui.View):
             json_object = json.dumps(match_json, indent=4, default=dict)
             
             await interaction.response.defer(ephemeral=True)
-            await asyncio.sleep(4)
+            await asyncio.sleep(1)
             
             if not node_processes:
                 with open("matchdb.json", "w") as outfile:
@@ -153,7 +159,7 @@ class Menu(discord.ui.View):
         try:
             os.remove("temp.json")
             await interaction.response.defer(ephemeral=True)
-            await asyncio.sleep(4)
+            await asyncio.sleep(1)
             await interaction.followup.send("Match setup has been cancelled.", ephemeral=True)
         except FileNotFoundError:
             await interaction.followup.send("Slow down! You are spamming the button too much.", ephemeral=True)
@@ -574,26 +580,84 @@ async def drop_error(ctx, error): #Error message to be sent if the user input is
 async def start_attack(interaction: discord.Interaction, defender: str):
     view = Menu()
     phase = "attacker"
-                
-    with open("matchdb.json", "r") as openfile:
-        match_json = json.load(openfile)
+    defender_index = 10000
+    player_index = 10000
+    index = -1
+    maps = []
+    scores = []
+    map_index = 5
+    score_index = 6
 
-    defender_index = get_dict_value(match_json, defender)[1]
+    await interaction.response.defer(ephemeral=True)
 
-    map1 = match_json["matches"][defender_index]["map1"]
-    map2 = match_json["matches"][defender_index]["map2"]
-    map3 = match_json["matches"][defender_index]["map3"]
-    map4 = match_json["matches"][defender_index]["map4"]
-    map5 = match_json["matches"][defender_index]["map5"]
+    try:
+        with open("userdb.json", "r") as openfile:
+            user_json = json.load(openfile)
+            
+        discord_name = interaction.user.name
+
+        user_index = get_dict_value(user_json, discord_name)[1]
+        username = user_json["users"][user_index]["osu_username"]
+    except TypeError:
+        await interaction.followup.send("Your osu! account is unlinked, use `/osu-link <username>` to link your account first.", ephemeral=True)
+        return None
     
     try:
-        if add_match(interaction, map1, map2, map3, map4, map5, phase, defender):
-            await interaction.response.send_message(f"Press confirm to start your clan attack. Make sure you are online on osu! to receive the invite.", view=view, ephemeral=True)
-        else:
-            await interaction.response.send_message("Please check if you have entered any duplicate maps or if you have already attacked 2 times.")
-    except TypeError:
-        await interaction.response.send_message("Your osu! account is unlinked, use `/osu-link <username>` to link your account first.")
+        player_list = sheets.get_values(os.environ.get('SHEET_TAB_NAME'), os.environ.get('GOOGLE_SHEET_ID'), "A1:B67")
+    except sheets.StatError as e:
+        await interaction.followup.send(str(e))
+        return None
 
+    for row in player_list:
+        index += 1
+        for cell in row:
+            if cell == defender:
+                defender_index = index
+            if cell == username:
+                player_index = index
+    
+    try:
+        defender_clan = player_list[defender_index][1]
+        index = -1
+
+        attacker_clan = player_list[player_index][1]
+        index = -1
+    except IndexError:
+        await interaction.followup.send("Defender or attacker was not found.", ephemeral=True)
+        return None
+
+    try:
+        clan_scores = sheets.get_values(defender_clan, os.environ.get('GOOGLE_SHEET_ID'), "D3:Y25")
+    except sheets.StatError as e:
+        await interaction.followup.send(str(e))
+        return None
+
+    for row in clan_scores:
+        index += 1
+        for cell in row:
+            if cell == defender:
+                break
+        else:
+            continue
+        break
+
+    try:
+        for i in range(5):
+            maps.append(clan_scores[index][map_index]) 
+            scores.append(str(f"{clan_scores[index][score_index]}, "+f"{clan_scores[index][score_index+1]}"))
+            map_index += 3
+            score_index += 3
+    except IndexError:
+        await interaction.followup.send("Defender was not found.", ephemeral=True)
+        return None
+
+    if attacker_clan == defender_clan:
+        await interaction.followup.send("You cannot attack someone from the same clan.", ephemeral=True)
+    elif add_match(interaction, maps[0], maps[1], maps[2], maps[3], maps[4], phase, defender, defender_clan, scores[0], scores[1], scores[2], scores[3], scores[4]):
+        await interaction.followup.send(f"Press confirm to start your clan attack. Make sure you are online on osu! to receive the invite.", view=view, ephemeral=True)
+    else:
+        await interaction.followup.send("Please check if you have entered any duplicate maps or if you have already attacked 2 times.", ephemeral=True)
+    
 @client.tree.command(name="defend", description="Start a defense lobby")
 async def start_defense(interaction: discord.Interaction, map1: str, map2: str, map3: str, map4: str, map5: str):
     view = Menu()
@@ -607,6 +671,8 @@ async def start_defense(interaction: discord.Interaction, map1: str, map2: str, 
         map5: False
     }
 
+    await interaction.response.defer(ephemeral=True)
+
     for mod in mods:
         for map in hasMod:
             if mod in map.lower() and len(map) == 3 and map[2].isdigit():
@@ -617,13 +683,13 @@ async def start_defense(interaction: discord.Interaction, map1: str, map2: str, 
 
     try:
         if (False in hasMod.values()):
-            await interaction.response.send_message("Please input a valid map from the mappool (i.e.: NM1, NM2, etc.)")
-        elif add_match(interaction, map1, map2, map3, map4, map5, phase, ""):
-            await interaction.response.send_message(f"Press confirm to start your clan defense. Make sure you are online on osu! to receive the invite. (Maps: {map1}, {map2}, {map3}, {map4}, {map5})", view=view, ephemeral=True)
+            await interaction.followup.send("Please input a valid map from the mappool (i.e.: NM1, NM2, etc.)", ephemeral=True)
+        elif add_match(interaction, map1, map2, map3, map4, map5, phase, "", "", "", "", "", "", ""):
+            await interaction.followup.send(f"Press confirm to start your clan defense. Make sure you are online on osu! to receive the invite. (Maps: {map1}, {map2}, {map3}, {map4}, {map5})", view=view, ephemeral=True)
         else:
-            await interaction.response.send_message("Please check if you have entered any duplicate maps or if you have already defended 2 times.")
+            await interaction.followup.send("Please check if you have entered any duplicate maps or if you have already defended 2 times.", ephemeral=True)
     except TypeError:
-        await interaction.response.send_message("Your osu! account is unlinked, use `/osu-link <username>` to link your account first.")
+        await interaction.followup.send("Your osu! account is unlinked, use `/osu-link <username>` to link your account first.", ephemeral=True)
 
 @client.tree.command(name="osu-link", description="Link your osu! account to Noble")
 async def osu_link(interaction: discord.Interaction, username: str):
